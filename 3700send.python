@@ -3,7 +3,7 @@
 import argparse, socket, time, json, select, struct, sys, math
 
 DATA_SIZE = 1375
-WINDOW_SIZE = 2  # Define the window size
+WINDOW_SIZE = 2
 
 class Sender:
     def __init__(self, host, port):
