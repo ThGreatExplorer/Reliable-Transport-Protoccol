@@ -3,6 +3,7 @@
 import argparse, socket, time, json, select, struct, sys, math
 
 DATA_SIZE = 1375
+WINDOW_SIZE = 2  # Define the window size
 
 class Sender:
     def __init__(self, host, port):
@@ -11,39 +12,45 @@ class Sender:
         self.log("Sender starting up using port %s" % self.remote_port)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
-        self.waiting = False
+        self.seq_num = 0  # Sequence number of the packet
+        self.ack_expected = 0
+        self.window = []  # Keep track of the packets in the window
 
     def log(self, message):
         sys.stderr.write(message + "\n")
         sys.stderr.flush()
 
     def send(self, message):
-        self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
+        # get Seq_num
+        packet = {"seq_num": self.seq_num, "data": message}
+        self.window.append(packet)
+        self.socket.sendto(json.dumps(packet).encode('utf-8'), (self.host, self.remote_port))
+        self.seq_num += 1
 
     def run(self):
-        while True:
-            sockets = [self.socket, sys.stdin] if not self.waiting else [self.socket]
-
-            socks = select.select(sockets, [], [], 0.1)[0]
-            for conn in socks:
-                if conn == self.socket:
-                    k, addr = conn.recvfrom(65535)
-                    msg = k.decode('utf-8')
-
-                    self.log("Received message '%s'" % msg)
-                    self.waiting = False
-                elif conn == sys.stdin:
+        try:
+            while True:
+                # check if the window is full
+                if len(self.window) < WINDOW_SIZE:
                     data = sys.stdin.read(DATA_SIZE)
                     if len(data) == 0:
                         self.log("All done!")
-                        sys.exit(0)
+                        break
 
-                    msg = { "type": "msg", "data": data }
-                    self.log("Sending message '%s'" % msg)
-                    self.send(msg)
-                    self.waiting = True
+                    self.log(f"Sending packet with seq_num {self.seq_num}")
+                    self.send(data)
 
-        return
+                # Check for incoming acks
+                ready = select.select([self.socket], [], [], 0.1)[0]
+                if ready:
+                    ack_msg, _ = self.socket.recvfrom(65535)
+                    ack = json.loads(ack_msg.decode('utf-8'))
+                    self.log(f"Received ack for seq_num {ack['ack']}")
+                    # Slide window and remove acknowledged packets
+                    self.window = [pkt for pkt in self.window if pkt['seq_num'] > ack['ack']]
+                    self.ack_expected = ack['ack'] + 1
+        finally:
+            self.socket.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='send data')
@@ -52,3 +59,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     sender = Sender(args.host, args.port)
     sender.run()
+
