@@ -18,6 +18,7 @@ class Receiver:
 
     def send(self, message):
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.remote_host, self.remote_port))
+        self.log("Sending ack for: " + str(self.last_seq_num))
 
     def log(self, message):
         sys.stderr.write(message + "\n")
@@ -45,38 +46,26 @@ class Receiver:
                 if seq_num <= self.last_seq_num:
                     continue
                 
-                # check if the sequence number is one more than current sequence number, if not
-                # then the packet is out of order
-                if seq_num == self.last_seq_num + 1 and len(self.window) == 0:
+                # If the packet is the next expected packet, process it and any subsequent packets in the window
+                if seq_num == self.last_seq_num + 1:
                     self.last_seq_num = seq_num
-                     # Send back an acknowledgment with the received sequence number
-                    ack_msg = {"type": "ack", "ack": seq_num}
+                    ack_msg = {"type": "ack", "ack": self.last_seq_num}
                     self.send(ack_msg)
 
+                    # Check the window for any packets that can now be processed
+                    self.window.sort(key=lambda x: x['seq_num'])  # Ensure the window is sorted
+                    while self.window and self.window[0]['seq_num'] == self.last_seq_num + 1:
+                        packet = self.window.pop(0)
+                        self.last_seq_num = packet['seq_num']
+                        ack_msg = {"type": "ack", "ack": self.last_seq_num}
+                        self.send(ack_msg)
                 else:
-                    if len(self.window) > WINDOW_SIZE:
-                        raise ValueError(f"Sequence overflow {self.window}")
-                    else: 
-                        packet = {"seq_num": seq_num, "data": msg}
-                        self.window.append(packet)
-
-                        if seq_num == self.last_seq_num + 1:
-                            # sort the window
-                            seq_nums = list(map(lambda x: x['seq_num'], self.window))
-                            sorted_seq_nums = sorted(seq_nums)
-                            counter = self.last_seq_num
-                            for entry in sorted_seq_nums:
-                                if entry != counter + 1:
-                                    raise ValueError("Out of order sequence")
-                                counter += 1
-
-                            # send out the acknowledgements
-                            for i in range(sorted_seq_nums[0], sorted_seq_nums[-1] + 1):
-                                ack_msg = {"type": "ack", "ack": i}
-                                self.send(ack_msg)
-
-                            # resize window
-                            self.window = []
+                    # If out of order, add to the window, but only if it's within the window size
+                    if len(self.window) < WINDOW_SIZE:
+                        self.window.append(msg)
+                    else:
+                        self.log(f"Warning: Received packet outside of window size (Seq: {seq_num})")
+                        raise ValueError("Exceeded window size")
 
                             
 
