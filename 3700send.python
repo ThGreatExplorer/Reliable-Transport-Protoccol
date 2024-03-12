@@ -1,9 +1,8 @@
 #!/usr/bin/env -S python3 -u
 
-import argparse, socket, time, json, select, struct, sys, math
+import argparse, socket, time, json, select, struct, sys, math, datetime
 
 DATA_SIZE = 1375
-WINDOW_SIZE = 4
 
 class Sender:
     def __init__(self, host, port):
@@ -12,45 +11,77 @@ class Sender:
         self.log("Sender starting up using port %s" % self.remote_port)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('0.0.0.0', 0))
-        self.seq_num = 0  # Sequence number of the packet
-        self.ack_expected = 0
-        self.window = []  # Keep track of the packets in the window
+        self.sequence_number = 0
+        self.acknowledged_sequence = -1  # Last ack received
+        self.acknowledge_timestamp = datetime.datetime.now()
+        self.window_size = 4
+        self.packet_queue = []
 
     def log(self, message):
         sys.stderr.write(message + "\n")
         sys.stderr.flush()
 
     def send(self, message):
-        # get Seq_num
-        packet = {"seq_num": self.seq_num, "data": message}
-        self.window.append(packet)
-        self.socket.sendto(json.dumps(packet).encode('utf-8'), (self.host, self.remote_port))
-        self.seq_num += 1
+        message['seq_num'] = self.sequence_number
+        self.packet_queue.append(message)  # Keep track of sent but not acked packets
+        self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
+        self.sequence_number += 1
 
     def run(self):
-        try:
-            while True:
-                # check if the window is full
-                if len(self.window) < WINDOW_SIZE:
-                    data = sys.stdin.read(DATA_SIZE)
-                    if len(data) == 0:
-                        self.log("All done!")
-                        break
+        while True:
+            packet_nums = [entry['seq_num'] for entry in self.packet_queue]
+            self.log(f"{packet_nums}")
+            self.log(f"{self.acknowledged_sequence}")
+            if not self.waiting_for_ack():
+                data = sys.stdin.read(DATA_SIZE)
+                if len(data) != 0:
+                    msg = {"type": "msg", "data": data}
+                    self.log(f"Sending message with sequence {self.sequence_number}")
+                    self.send(msg)
+                elif len(data) == 0 and len(self.packet_queue) == 0:
+                    self.log("All done!")
+                    sys.exit(0)
+                elif len(data) == 0 and len(self.packet_queue) != 0:
+                    if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= 1.05:
+                        # Assume the packet has been dropped and resend the last packet
+                        last_msg = [entry for entry in self.packet_queue if entry['seq_num'] == self.acknowledged_sequence + 1][0]
+                        self.log(f"Resending message with sequence {last_msg['seq_num']}")
+                        self.socket.sendto(json.dumps(last_msg).encode('utf-8'), (self.host, self.remote_port))
 
-                    self.log(f"Sending packet with seq_num {self.seq_num}")
-                    self.send(data)
+                        # update the acknowledge_timestamp since we just sent the packet
+                        self.acknowledge_timestamp = datetime.datetime.now()
+            else:
+                print(datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp))
+                if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= 1.05:
+                    # Assume the packet has been dropped and resend the last packet
+                    last_msg = [entry for entry in self.packet_queue if entry['seq_num'] == self.acknowledged_sequence + 1][0]
+                    self.log(f"Resending message with sequence {last_msg['seq_num']}")
+                    self.socket.sendto(json.dumps(last_msg).encode('utf-8'), (self.host, self.remote_port))
 
-                # Check for incoming acks
-                ready = select.select([self.socket], [], [], 0.1)[0]
-                if ready:
-                    ack_msg, _ = self.socket.recvfrom(65535)
-                    ack = json.loads(ack_msg.decode('utf-8'))
-                    self.log(f"Received ack for seq_num {ack['ack']}")
-                    # Slide window and remove acknowledged packets
-                    self.window = [pkt for pkt in self.window if pkt['seq_num'] > ack['ack']]
-                    self.ack_expected = ack['ack'] + 1
-        finally:
-            self.socket.close()
+                    # update the acknowledge_timestamp since we just sent the packet
+                    self.acknowledge_timestamp = datetime.datetime.now()
+
+            readable, _, _ = select.select([self.socket], [], [], 0.1)
+            for s in readable:
+                if s == self.socket:
+                    k, addr = s.recvfrom(65535)
+                    msg = json.loads(k.decode('utf-8'))
+
+                    self.log(f"Received ack for sequence {msg['ack']}")
+                    self.acknowledge(msg['ack'])
+
+    def waiting_for_ack(self):
+        # Return True if we are waiting for an ack to advance the window
+        #return len(self.packet_queue) >= self.window_size or (self.packet_queue and self.packet_queue[0]['seq_num'] <= self.acknowledged_sequence)
+        return len(self.packet_queue) >= self.window_size or (self.packet_queue and self.packet_queue[0]['seq_num'] <= self.acknowledged_sequence)
+
+    def acknowledge(self, sequence):
+        # Mark packets as acknowledged
+        while self.packet_queue and self.packet_queue[0]['seq_num'] <= sequence:
+            acked_packet = self.packet_queue.pop(0)
+            self.acknowledged_sequence = max(self.acknowledged_sequence, acked_packet['seq_num'])
+        # set the last acknowledge timestamp
+        self.acknowledge_timestamp = datetime.datetime.now()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='send data')
@@ -59,4 +90,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     sender = Sender(args.host, args.port)
     sender.run()
-

@@ -39,11 +39,10 @@ class Receiver:
 
                 seq_num = msg.get("seq_num")
 
-                # Process and print the packet's data
-                print(msg.get("data", ""), end='', flush=True)
-
                 # Check if this packet is a duplicate
                 if seq_num <= self.last_seq_num:
+                    ack_msg = {"type": "ack", "ack": self.last_seq_num}
+                    self.send(ack_msg)
                     continue
                 
                 # If the packet is the next expected packet, process it and any subsequent packets in the window
@@ -51,6 +50,7 @@ class Receiver:
                     self.last_seq_num = seq_num
                     ack_msg = {"type": "ack", "ack": self.last_seq_num}
                     self.send(ack_msg)
+                    print(msg.get("data", ""), end='', flush=True)
 
                     # Check the window for any packets that can now be processed
                     self.window.sort(key=lambda x: x['seq_num'])  # Ensure the window is sorted
@@ -59,6 +59,8 @@ class Receiver:
                         self.last_seq_num = packet['seq_num']
                         ack_msg = {"type": "ack", "ack": self.last_seq_num}
                         self.send(ack_msg)
+                        print(packet.get("data", ""), end='', flush=True)
+                        time.sleep(.01)
                 else:
                     # If out of order, add to the window, but only if it's within the window size
                     if len(self.window) < WINDOW_SIZE:
