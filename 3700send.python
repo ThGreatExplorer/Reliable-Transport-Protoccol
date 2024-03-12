@@ -1,6 +1,6 @@
 #!/usr/bin/env -S python3 -u
 
-import argparse, socket, time, json, select, struct, sys, math, datetime
+import argparse, socket, time, json, select, struct, sys, math, datetime, hashlib
 
 DATA_SIZE = 1375
 
@@ -22,9 +22,14 @@ class Sender:
         sys.stderr.flush()
 
     def send(self, message):
-        message['seq_num'] = self.sequence_number
+        message['seq_num'] = self.sequence_number 
+        hashcode = hashlib.new('sha256')
+        hashcode.update(message['data'].encode())
+        message['checksum'] = hashcode.hexdigest() # compute a hashed checksum for every message, expected behavior is that if the 
+        # receiver doesn't recompute the same checksum, then the receiver will pretend the message is dropped
         self.packet_queue.append(message)  # Keep track of sent but not acked packets
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
+        self.log(f"Sending message with sequence {self.sequence_number} : {message}")
         self.sequence_number += 1
 
     def run(self):
@@ -36,39 +41,42 @@ class Sender:
                 data = sys.stdin.read(DATA_SIZE)
                 if len(data) != 0:
                     msg = {"type": "msg", "data": data}
-                    self.log(f"Sending message with sequence {self.sequence_number}")
                     self.send(msg)
                 elif len(data) == 0 and len(self.packet_queue) == 0:
                     self.log("All done!")
                     sys.exit(0)
                 elif len(data) == 0 and len(self.packet_queue) != 0:
                     if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= 1.05:
-                        # Assume the packet has been dropped and resend the last packet
-                        last_msg = [entry for entry in self.packet_queue if entry['seq_num'] == self.acknowledged_sequence + 1][0]
-                        self.log(f"Resending message with sequence {last_msg['seq_num']}")
-                        self.socket.sendto(json.dumps(last_msg).encode('utf-8'), (self.host, self.remote_port))
-
-                        # update the acknowledge_timestamp since we just sent the packet
-                        self.acknowledge_timestamp = datetime.datetime.now()
+                        self.log("Dropped ack")
+                        self.resend_next_ack_packet()
             else:
                 print(datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp))
                 if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= 1.05:
-                    # Assume the packet has been dropped and resend the last packet
-                    last_msg = [entry for entry in self.packet_queue if entry['seq_num'] == self.acknowledged_sequence + 1][0]
-                    self.log(f"Resending message with sequence {last_msg['seq_num']}")
-                    self.socket.sendto(json.dumps(last_msg).encode('utf-8'), (self.host, self.remote_port))
-
-                    # update the acknowledge_timestamp since we just sent the packet
-                    self.acknowledge_timestamp = datetime.datetime.now()
+                    self.log("Dropped ack")
+                    self.resend_next_ack_packet()
 
             readable, _, _ = select.select([self.socket], [], [], 0.1)
             for s in readable:
                 if s == self.socket:
                     k, addr = s.recvfrom(65535)
-                    msg = json.loads(k.decode('utf-8'))
+                    try:
+                        msg = json.loads(k.decode('utf-8'))
+                    except Exception as e:
+                        self.log(f"Corruped ack. Error: {e}")
+                        self.resend_next_ack_packet()
+                        continue
 
                     self.log(f"Received ack for sequence {msg['ack']}")
                     self.acknowledge(msg['ack'])
+
+    def resend_next_ack_packet(self):
+        # assume the ack was dropped or corrupted, resend the packet with the sequence number right after last packet which was acknowledged
+        last_msg = [entry for entry in self.packet_queue if entry['seq_num'] == self.acknowledged_sequence + 1][0]
+        self.log(f"Resending message with sequence {last_msg['seq_num']}: {last_msg}")
+        self.socket.sendto(json.dumps(last_msg).encode('utf-8'), (self.host, self.remote_port))
+
+        # update the acknowledge_timestamp since we just sent the packet
+        self.acknowledge_timestamp = datetime.datetime.now()
 
     def waiting_for_ack(self):
         # Return True if we are waiting for an ack to advance the window

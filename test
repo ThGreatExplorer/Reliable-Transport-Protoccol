@@ -5,8 +5,8 @@ import subprocess
 import sys
 import re
 
-SENDER_EXECUTABLE_NAME = "3700send"
-RECEIVER_EXECUTABLE_NAME = "3700recv"
+SENDER_EXECUTABLE_NAME = "3700send.python"
+RECEIVER_EXECUTABLE_NAME = "3700recv.python"
 RUN_SCRIPT_NAME = "run"
 CONFIG_DIR = "configs"
 
