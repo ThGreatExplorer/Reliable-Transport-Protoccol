@@ -13,9 +13,12 @@ class Sender:
         self.socket.bind(('0.0.0.0', 0))
         self.sequence_number = 0
         self.acknowledged_sequence = -1  # Last ack received
-        self.acknowledge_timestamp = datetime.datetime.now()
-        self.window_size = 4
+        self.acknowledge_timestamp = datetime.datetime.now() # timestamp from when the last ack was received 
+        # updates when a new packet is retransmitted
+        self.window_size = 8
         self.packet_queue = []
+        self.rtt = .5 # the estimated round-trip time for a packet to be sent and received. Default is 1 second.
+        # updates for when a packet is not sent.
 
     def log(self, message):
         sys.stderr.write(message + "\n")
@@ -34,6 +37,7 @@ class Sender:
 
     def run(self):
         while True:
+            self.log(str(datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp)) + " second delay")
             packet_nums = [entry['seq_num'] for entry in self.packet_queue]
             self.log(f"{packet_nums}")
             self.log(f"{self.acknowledged_sequence}")
@@ -46,12 +50,11 @@ class Sender:
                     self.log("All done!")
                     sys.exit(0)
                 elif len(data) == 0 and len(self.packet_queue) != 0:
-                    if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= 1.05:
+                    if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= self.rtt:
                         self.log("Dropped ack")
                         self.resend_next_ack_packet()
             else:
-                print(datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp))
-                if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= 1.05:
+                if datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp) >= self.rtt:
                     self.log("Dropped ack")
                     self.resend_next_ack_packet()
 
@@ -67,7 +70,19 @@ class Sender:
                         continue
 
                     self.log(f"Received ack for sequence {msg['ack']}")
+
+                    delay = datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp)
+                    # if you received an ack, then you can estimate the total round-trip time and use that as the new estimate
+                    #if delay <= self.rtt:
+                        # add delay with buffer
+                        #self.rtt = min(delay + .2, self.rtt)
+                    # if the estimated rrt is greater than the current rrt, then double it
+                    if delay > self.rtt:
+                        self.rtt = 2 * self.rtt
+
                     self.acknowledge(msg['ack'])
+
+                    
 
     def resend_next_ack_packet(self):
         # assume the ack was dropped or corrupted, resend the packet with the sequence number right after last packet which was acknowledged

@@ -2,7 +2,7 @@
 
 import argparse, socket, time, json, select, struct, sys, math, hashlib
 
-WINDOW_SIZE = 4
+#WINDOW_SIZE = 2
 
 class Receiver:
     def __init__(self):
@@ -15,6 +15,7 @@ class Receiver:
         self.remote_port = None
         self.last_seq_num = -1
         self.window = []
+        self.window_size = 8 # set the default window size as 8
 
     def send(self, message):
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.remote_host, self.remote_port))
@@ -30,14 +31,21 @@ class Receiver:
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
 
+                self.log(str(self.last_seq_num))
+                window_sequences = [entry["seq_num"] for entry in self.window]
+                self.log("Receiver Window: " + str(window_sequences))
+
                 if self.remote_host is None:
                     self.remote_host = addr[0]
                     self.remote_port = addr[1]
 
+                # try to read the data message and decode the fields, if an exception is thrown, then the data messsage is corrupted.
+                # wait for the sender to timeout and resend the packet
                 try:
                     msg = json.loads(data.decode('utf-8'))
                     self.log(f"Received data message: {msg}")
 
+                    # compute and check the hashcodes to ensure data integrity of the payload for the packets
                     seq_num = msg.get("seq_num")
                     data = msg.get("data")
                     computed_hashcode = hashlib.new("sha256")
@@ -72,6 +80,7 @@ class Receiver:
                     # Check the window for any packets that can now be processed
                     self.window.sort(key=lambda x: x['seq_num'])  # Ensure the window is sorted
                     while self.window and self.window[0]['seq_num'] == self.last_seq_num + 1:
+                        # send acks for the elements stored in the window based on their sequence number
                         packet = self.window.pop(0)
                         self.last_seq_num = packet['seq_num']
                         ack_msg = {"type": "ack", "ack": self.last_seq_num}
@@ -79,14 +88,13 @@ class Receiver:
                         print(packet.get("data", ""), end='', flush=True)
                 else:
                     # If out of order, add to the window, but only if it's within the window size
-                    if len(self.window) < WINDOW_SIZE:
-                        self.window.append(msg)
+                    if len(self.window) < self.window_size:
+                        # check if the packet is not already in the window
+                        if seq_num not in window_sequences:
+                            self.window.append(msg)
                     else:
                         self.log(f"Warning: Received packet outside of window size (Seq: {seq_num})")
                         raise ValueError("Exceeded window size")
-
-                            
-
                         
 
 if __name__ == "__main__":
