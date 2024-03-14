@@ -2,6 +2,7 @@
 
 import argparse, socket, time, json, select, struct, sys, math, datetime, hashlib
 
+# Note Sender and Reciever data sizes should be the same
 DATA_SIZE = 1375
 
 class Sender:
@@ -39,8 +40,8 @@ class Sender:
         while True:
             self.log(str(datetime.timedelta.total_seconds(datetime.datetime.now() - self.acknowledge_timestamp)) + " second delay")
             packet_nums = [entry['seq_num'] for entry in self.packet_queue]
-            self.log(f"{packet_nums}")
-            self.log(f"{self.acknowledged_sequence}")
+            self.log(f"Sender Window: {packet_nums}")
+            self.log(f"Last Acknowledgement Received for Packet #: {self.acknowledged_sequence}")
             if not self.waiting_for_ack():
                 data = sys.stdin.read(DATA_SIZE)
                 if len(data) != 0:
@@ -81,8 +82,6 @@ class Sender:
                         self.rtt = 2 * self.rtt
 
                     self.acknowledge(msg['ack'])
-
-                    
 
     def resend_next_ack_packet(self):
         # assume the ack was dropped or corrupted, resend the packet with the sequence number right after last packet which was acknowledged

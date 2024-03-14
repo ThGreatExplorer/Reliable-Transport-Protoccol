@@ -31,9 +31,9 @@ class Receiver:
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
 
-                self.log(str(self.last_seq_num))
                 window_sequences = [entry["seq_num"] for entry in self.window]
                 self.log("Receiver Window: " + str(window_sequences))
+                self.log("Last Valid Sequence # Received: " + str(self.last_seq_num))
 
                 if self.remote_host is None:
                     self.remote_host = addr[0]
